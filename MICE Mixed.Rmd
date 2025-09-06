@@ -1,0 +1,337 @@
+---
+title: "MICE Mixed"
+author: "24141303"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(arm)
+library(mice)
+
+# simulation sample size
+n <- 1000
+
+mixed.data <- function(n) {
+  x1 <- rnorm(n, 5, 1)
+  x2 <- rbinom(n, 1, 0.5)
+  
+  x3 <- 1.2*x1 + 0.5*x2 + rnorm(n,0,1)
+  
+  x4 <- rbinom(n, 1, invlogit(-2.5 + 0.3 * x1 + 0.2 * x3))
+  
+  x5 <- 3.2*x2 - 0.8*x3 + rnorm(n,0,1)
+  
+  x6 <- rbinom(n, 1, invlogit(-0.2 + 0.5 * x1 + 0.5 * x5))
+  
+  x7 <- -1.5*x4 - 0.4*x6 + rnorm(n,0,1)
+  
+  x8 <- rbinom(n, 1, invlogit(0.4 + 0.2 * x3 + 0.4 * x5))
+  
+  x9 <- 2.5*x6 + x7   + rnorm(n,0,1)
+  
+  x10<- rbinom(n, 1, invlogit(-0.5 + 0.45 * x8 + 0.55 * x9))
+  
+  all.data <- data.frame(
+    x1 = x1, x2 = x2, x3 = x3, x4 = factor(x4, levels = c(0, 1)), x5 = x5, 
+    x6 = factor(x6, levels = c(0, 1)), x7 = x7, x8 = factor(x8, levels = c(0, 1)), 
+    x9 = x9, x10 = factor(x10, levels = c(0, 1))
+  )
+  
+  return(all.data)
+}
+
+miss.method <- function(data, method) {
+  n <- nrow(data)
+  
+  if (method == "MCAR") {
+    
+    # set missing values for x3 to x10
+    data$x3[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x4[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x5[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x6[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x7[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x8[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x9[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))]  <- NA
+    data$x10[sample(c(TRUE, FALSE), n, replace = TRUE, prob = c(0.3, 0.7))] <- NA
+    
+  } else if (method == "MAR") {
+    
+    p.miss <- invlogit(-1.9 + 0.2 * data$x1 + 0.1 * data$x2)
+    
+    # set missing values for x3 to x10
+    data$x3[runif(n) < p.miss]  <- NA
+    data$x4[runif(n) < p.miss]  <- NA
+    data$x5[runif(n) < p.miss]  <- NA
+    data$x6[runif(n) < p.miss]  <- NA
+    data$x7[runif(n) < p.miss]  <- NA
+    data$x8[runif(n) < p.miss]  <- NA
+    data$x9[runif(n) < p.miss]  <- NA
+    data$x10[runif(n) < p.miss] <- NA
+  }
+  
+  return(data)
+}
+
+inferences <- function(mice.output) {
+  
+  all.x <- c("x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10")
+  
+  coef.list <- list(c("x1 + x2"), c("x1 + x3"), c("x2 + x3"), c("x1 + x5"),
+                    c("x4 + x6"), c("x3 + x5"), c("x6 + x7"), c("x8 + x9"))
+  
+  all.inferences <- data.frame(
+    x = all.x,
+    mean.value = rep(0, length(all.x)),
+    mean.CI.low = rep(0, length(all.x)),
+    mean.CI.up = rep(0, length(all.x)),
+    mean.var = rep(0, length(all.x)),
+    beta0 = rep(0, length(all.x)),
+    beta0.CI.low = rep(0, length(all.x)),
+    beta0.CI.up = rep(0, length(all.x)),
+    beta0.var = rep(0, length(all.x)),
+    beta1 = rep(0, length(all.x)),
+    beta1.CI.low = rep(0, length(all.x)),
+    beta1.CI.up = rep(0, length(all.x)),
+    beta1.var = rep(0, length(all.x)),
+    beta2 = rep(0, length(all.x)),
+    beta2.CI.low = rep(0, length(all.x)),
+    beta2.CI.up = rep(0, length(all.x)),
+    beta2.var = rep(0, length(all.x))
+  )
+  
+  for (i in 1:length(all.x)) {
+    
+    if (all.x[i] == "x3" | all.x[i] == "x5" | all.x[i] == "x7" | all.x[i] == "x9") {
+      
+      # contain mean from regression model with only intercept
+      mu.model <- with(mice.output, lm(as.formula(paste(all.x[i], "~ 1"))))
+      mu.summary <- summary(pool(mu.model), conf.int = TRUE)
+    
+      # store mean and its CI
+      all.inferences$mean.value[i] = mu.summary[1, 2]
+      all.inferences$mean.CI.low[i] = mu.summary[1, 7]
+      all.inferences$mean.CI.up[i] = mu.summary[1, 8]
+      all.inferences$mean.var[i] = (mu.summary[1, 3])^2
+      
+      # inferences for coefficients
+      coef.model <- with(mice.output, 
+                         lm(as.formula(paste(all.x[i], "~", paste(coef.list[[i]])))))
+      coef.summary <- summary(pool(coef.model), conf.int = TRUE)
+    
+      # store betas and their CI
+      all.inferences$beta0[i] = coef.summary[1, 2]
+      all.inferences$beta0.CI.low[i] = coef.summary[1, 7]
+      all.inferences$beta0.CI.up[i] = coef.summary[1, 8]
+      all.inferences$beta0.var[i] = (coef.summary[1, 3])^2
+    
+      all.inferences$beta1[i] = coef.summary[2, 2]
+      all.inferences$beta1.CI.low[i] = coef.summary[2, 7]
+      all.inferences$beta1.CI.up[i] = coef.summary[2, 8]
+      all.inferences$beta1.var[i] = (coef.summary[2, 3])^2
+    
+      all.inferences$beta2[i] = coef.summary[3, 2]
+      all.inferences$beta2.CI.low[i] = coef.summary[3, 7]
+      all.inferences$beta2.CI.up[i] = coef.summary[3, 8]
+      all.inferences$beta2.var[i] = (coef.summary[3, 3])^2
+      
+    } else {
+      
+      # contain mean from regression model with only intercept
+      mu.model <- with(mice.output, glm(as.formula(paste(all.x[i], "~ 1")), 
+                                        family = binomial()))
+      mu.summary <- summary(pool(mu.model), conf.int = TRUE)
+    
+      # store mean and its CI
+      all.inferences$mean.value[i] = invlogit(mu.summary[1, 2])
+      all.inferences$mean.CI.low[i] = invlogit(mu.summary[1, 7])
+      all.inferences$mean.CI.up[i] = invlogit(mu.summary[1, 8])
+      all.inferences$mean.var[i] = ( mu.summary[1, 3] * invlogit(mu.summary[1, 2]) *
+                                    (1 - invlogit(mu.summary[1, 2])) )^2
+      
+      # inferences for coefficients
+      coef.model <- with(mice.output, 
+                         glm(as.formula(paste(all.x[i], "~", paste(coef.list[[i]]))),
+                             family = binomial()))
+      coef.summary <- summary(pool(coef.model), conf.int = TRUE)
+    
+      # store betas and their CI
+      all.inferences$beta0[i] = coef.summary[1, 2]
+      all.inferences$beta0.CI.low[i] = coef.summary[1, 7]
+      all.inferences$beta0.CI.up[i] = coef.summary[1, 8]
+      all.inferences$beta0.var[i] = (coef.summary[1, 3])^2
+    
+      all.inferences$beta1[i] = coef.summary[2, 2]
+      all.inferences$beta1.CI.low[i] = coef.summary[2, 7]
+      all.inferences$beta1.CI.up[i] = coef.summary[2, 8]
+      all.inferences$beta1.var[i] = (coef.summary[2, 3])^2
+    
+      all.inferences$beta2[i] = coef.summary[3, 2]
+      all.inferences$beta2.CI.low[i] = coef.summary[3, 7]
+      all.inferences$beta2.CI.up[i] = coef.summary[3, 8]
+      all.inferences$beta2.var[i] = (coef.summary[3, 3])^2
+      
+    }
+  }
+  
+  return(all.inferences)
+}
+
+mice.iteration <- function(n, miss, iterate) {
+  
+  output <- matrix(0, nrow = 32, ncol = 5)
+  
+  rownames(output) <- c("x3.mean","x3.beta0", "x3.beta1","x3.beta2",
+                        "x4.mean","x4.beta0", "x4.beta1","x4.beta2",
+                        "x5.mean","x5.beta0", "x5.beta1","x5.beta2",
+                        "x6.mean","x6.beta0", "x6.beta1","x6.beta2",
+                        "x7.mean","x7.beta0", "x7.beta1","x7.beta2",
+                        "x8.mean","x8.beta0", "x8.beta1","x8.beta2",
+                        "x9.mean","x9.beta0", "x9.beta1","x9.beta2",
+                        "x10.mean","x10.beta0", "x10.beta1","x10.beta2")
+  
+  colnames(output) <- c("Count","Emp.Var", "Ave.Var", "Var.Ratio","Bias")
+  
+  mu.beta <- matrix(0, nrow = 32, ncol = iterate)
+  all.var <- matrix(0, nrow = 32, ncol = iterate)
+  
+  true.value <- matrix(c(6.251249, 0, 1.2, 0.5, 
+                         0.557831, -2.5, 0.3, 0.2,
+                         -3.401219, 0, 3.2, -0.8, 
+                         0.621695, -0.2, 0.5, 0.5,
+                         -1.085231, 0, -1.5, -0.4, 
+                         0.56337, 0.4, 0.2, 0.4,
+                         0.4707117, 0, 2.5, 1, 
+                         0.503764, -0.5, 0.45, 0.55), 
+                       nrow = 32, ncol = 1, byrow = TRUE)
+  
+  for (i in 1:iterate) {
+    
+    data <- mixed.data(n)
+    
+    if (miss == "MCAR") {
+      mice.data <- miss.method(data, "MCAR")
+      
+      meth <- rep("", 10)
+      meth[c(3, 5, 7, 9)] <- "norm"
+      meth[c(4, 6, 8, 10)] <- "logreg"
+    
+    } else if (miss == "MAR") {
+      mice.data <- miss.method(data, "MAR")
+      
+      meth <- rep("", 10)
+      meth[c(3, 5, 7, 9)] <- "norm"
+      meth[c(4, 6, 8, 10)] <- "logreg"
+    }
+    
+    pred <- make.predictorMatrix(mice.data)
+    # Full strategy
+    diag(pred) <- 0
+    
+    # parents-only strategy
+    #pred[ , ] = 0
+    #pred["x3", c("x1", "x2")] <- 1
+    #pred["x4", c("x1", "x3")] <- 1
+    #pred["x5", c("x2", "x3")] <- 1
+    #pred["x6", c("x1", "x5")] <- 1
+    #pred["x7", c("x4", "x6")] <- 1
+    #pred["x8", c("x3", "x5")] <- 1
+    #pred["x9", c("x6", "x7")] <- 1
+    #pred["x10", c("x8", "x9")] <- 1
+    
+    
+    mice.result <- mice(mice.data, m = 10, method = meth, predictorMatrix = pred, 
+                        maxit = 15, printFlag = FALSE, seed = i)
+    
+    result <- inferences(mice.result)
+    
+    for (k in seq(from = 4, to = 32, by = 4)) {
+      
+      mu.beta[k-3, i] = result$mean.value[k/4]
+      mu.beta[k-2, i] = result$beta0[k/4]
+      mu.beta[k-1, i] = result$beta1[k/4]
+      mu.beta[k, i] = result$beta2[k/4]
+      
+      all.var[k-3, i] = result$mean.var[k/4]
+      all.var[k-2, i] = result$beta0.var[k/4]
+      all.var[k-1, i] = result$beta1.var[k/4]
+      all.var[k, i] = result$beta2.var[k/4]
+        
+      if (result$mean.CI.up[k/4] >= true.value[k-3]  & 
+          result$mean.CI.low[k/4] <= true.value[k-3]) {
+        output[k-3, 1] = output[k-3, 1] + 1
+      }
+      if (result$beta0.CI.up[k/4] >= true.value[k-2]  & 
+          result$beta0.CI.low[k/4] <= true.value[k-2]) {
+        output[k-2, 1] = output[k-2, 1] + 1
+      }
+      if (result$beta1.CI.up[k/4] >= true.value[k-1]  & 
+          result$beta1.CI.low[k/4] <= true.value[k-1]) {
+        output[k-1, 1] = output[k-1, 1] + 1
+      }
+      if (result$beta2.CI.up[k/4] >= true.value[k]  & 
+          result$beta2.CI.low[k/4] <= true.value[k]) {
+        output[k, 1] = output[k, 1] + 1
+      }
+    }
+  } 
+  
+  output[, 1] = output[, 1] / iterate
+  
+  for (i in seq(from = 4, to = 32, by = 4)) {
+    for (j in (i-3):i) {
+      output[j, 2] = var(mu.beta[j, 1:iterate], na.rm = TRUE)
+      
+      output[j, 3] = mean(all.var[j, 1:iterate], na.rm = TRUE)
+      
+      output[j, 4] = mean(all.var[j, 1:iterate], na.rm = TRUE) /
+                     var(mu.beta[j, 1:iterate], na.rm = TRUE)
+
+      output[j, 5] = mean(mu.beta[j, 1:iterate], na.rm = TRUE) - true.value[j, 1]
+    }
+  }
+  
+  return(output)
+}
+
+set.seed(123)
+mcar.output <- mice.iteration(1000, "MCAR", 100)
+
+set.seed(123)
+mar.output <- mice.iteration(1000, "MAR", 100)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
